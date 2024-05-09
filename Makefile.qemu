@@ -1,0 +1,40 @@
+build: repos/coreboot/build/coreboot.rom Fedora-Server-36-1.5.aarch64.raw
+
+repos/coreboot/util/crossgcc/xgcc/bin/aarch64-elf-gcc:
+	make -C ./repos/coreboot crossgcc-aarch64 CPUS=$$(nproc) -j
+
+repos/u-root/initramfs.linux_arm64.cpio:
+	cd ./repos/u-root && \
+	go build . && \
+	GOARCH=arm64 ./u-root -uroot-source . -o initramfs.linux_arm64.cpio coreboot-app cmds/core/* cmds/exp/* cmds/boot/*
+
+repos/linux/arch/arm64/boot/Image: repos/u-root/initramfs.linux_arm64.cpio ./blobs/linux/qemu-sbsa-defconfig
+	cp ./blobs/linux/qemu-sbsa-defconfig ./repos/linux/.config
+	make -C ./repos/linux ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j olddefconfig
+	make -C ./repos/linux ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j Image
+
+repos/coreboot/payloads/uefistub/build/uefistub.elf: repos/linux/arch/arm64/boot/Image repos/coreboot/util/crossgcc/xgcc/bin/aarch64-elf-gcc blobs/uefistub/qemu-sbsa-defconfig
+	cp ./blobs/uefistub/qemu-sbsa-defconfig ./repos/coreboot/payloads/uefistub/configs/defconfig
+	cd ./repos/coreboot/payloads/uefistub && \
+	make defconfig && \
+	make
+
+repos/coreboot/build/coreboot.rom: repos/coreboot/payloads/uefistub/build/uefistub.elf repos/coreboot/util/crossgcc/xgcc/bin/aarch64-elf-gcc
+	cp ./blobs/coreboot/qemu-sbsa-uefistub-defconfig ./repos/coreboot/configs/defconfig
+	make -C ./repos/coreboot defconfig
+	make -C ./repos/coreboot -j
+	truncate -s 256M $@
+
+Fedora-Server-36-1.5.aarch64.raw: blobs/Fedora-Server-36-1.5.aarch64.raw.xz
+	xz --stdout -d $< > $@
+
+run: repos/coreboot/build/coreboot.rom Fedora-Server-36-1.5.aarch64.raw blobs/tfa/TFA.fd
+	qemu-system-aarch64 -nographic -m 1024 -M sbsa-ref -pflash ./blobs/tfa/TFA.fd -pflash ./repos/coreboot/build/coreboot.rom -drive file=Fedora-Server-36-1.5.aarch64.raw,format=raw
+
+clean:
+	make -C repos/coreboot/payloads/uefistub clean
+	make -C repos/coreboot distclean
+	make -C repos/linux distclean
+	rm repos/u-root/initramfs.linux-arm64.cpio
+
+.PHONY: clean build run

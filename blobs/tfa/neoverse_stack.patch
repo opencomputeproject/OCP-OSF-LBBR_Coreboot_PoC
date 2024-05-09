@@ -1,0 +1,13 @@
+diff --git a/plat/arm/css/sgi/include/sgi_base_platform_def.h b/plat/arm/css/sgi/include/sgi_base_platform_def.h
+index c1fadc654..e7a276fe1 100644
+--- a/plat/arm/css/sgi/include/sgi_base_platform_def.h
++++ b/plat/arm/css/sgi/include/sgi_base_platform_def.h
+@@ -123,7 +123,7 @@
+ # if TRUSTED_BOARD_BOOT
+ #  define PLATFORM_STACK_SIZE 0x1000
+ # else
+-#  define PLATFORM_STACK_SIZE 0x400
++#  define PLATFORM_STACK_SIZE 0x1000
+ # endif
+ #elif defined(IMAGE_BL2U)
+ # define PLATFORM_STACK_SIZE 0x400

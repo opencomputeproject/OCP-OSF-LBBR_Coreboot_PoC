@@ -1,0 +1,16 @@
+[submodule "repos/u-root"]
+	path = repos/u-root
+	url = https://github.com/u-root/u-root.git
+[submodule "repos/linux"]
+	path = repos/linux
+	url = https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+	shallow = true
+	branch = linux-rolling-stable
+[submodule "repos/trusted-firmware-a"]
+	path = repos/trusted-firmware-a
+	url = https://git.gitlab.arm.com/infra-solutions/reference-design/platsw/trusted-firmware-a
+	branch = refinfra-fremont
+	#branch = RD-INFRA-2023.06.30
+[submodule "repos/coreboot"]
+	path = repos/coreboot
+	url = https://review.coreboot.org/coreboot

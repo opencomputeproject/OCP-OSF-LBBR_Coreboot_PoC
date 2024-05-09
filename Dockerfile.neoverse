@@ -1,0 +1,47 @@
+FROM ubuntu:22.04 AS base
+
+ARG TARGETARCH=amd64
+
+ARG USER_ID
+ARG GROUP_ID
+
+# Install dependencies
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt update && echo "Hello"
+
+RUN if [ ${USER_ID:-0} -ne 0 ] && [ ${GROUP_ID:-0} -ne 0 ]; then \
+    groupadd -g ${GROUP_ID} devuser && \
+    adduser --quiet --disabled-password --shell /bin/zsh --home /home/devuser --gecos "User" devuser --uid ${USER_ID} --gid ${GROUP_ID} && \
+    echo "devuser:dev" | chpasswd && \
+    usermod -aG sudo devuser; \
+    fi
+
+RUN apt-get -y install software-properties-common && \
+    add-apt-repository -y ppa:apt-fast/stable && \
+    apt-get update && \
+    apt-get install -y apt-fast
+
+RUN DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-fast -y install tzdata
+
+RUN apt-fast install -y sudo curl gnupg zsh wget locales fonts-powerline
+# locale-gen en_US.UTF-8
+
+RUN apt-fast install -y git bison build-essential curl flex gnat libncurses5-dev m4 zlib1g-dev gcc-aarch64-linux-gnu git-core git-lfs cmatrix exuberant-ctags libssl-dev device-tree-compiler golang bc vim
+
+RUN apt-get -y autoremove && apt-get -y autoclean && apt-get -y clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+RUN find / -type f -name "*.py[co]" -delete
+
+# Set up Git via SSH
+RUN echo "StrictHostKeyChecking no" >> /etc/ssh/ssh_config
+
+WORKDIR /work
+
+RUN git config --global --add safe.directory /work
+RUN git config --global --add safe.directory /work/repos/u-root
+RUN git config --global --add safe.directory /work/repos/coreboot
+
+USER devuser
+ENV TERM xterm

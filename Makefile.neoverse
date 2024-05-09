@@ -1,0 +1,272 @@
+
+UID ?= $(shell id -u)
+GID ?= $(shell id -g)
+
+docker_build:
+	@docker build --build-arg USER_ID=$(UID) --build-arg GROUP_ID=$(GID) -f Dockerfile.neoverse -t neo_dev .
+
+docker_run:
+	@docker run -h multi-neoverse -it --rm -v $$HOME/.ssh:/home/devuser/.ssh -v $$(pwd):/work -v $$HOME/.bash_history:/home/devuser/.bash_history neo_dev bash -c " ls -alhS && echo 'root passowrd: dev' && make  -f Makefile.neoverse help && exec bash"
+
+docker_neoverse_build:
+	@docker run -h multi-neoverse -it --rm -v $$HOME/.ssh:/home/devuser/.ssh -v $$(pwd):/work -v $$HOME/.bash_history:/home/devuser/.bash_history neo_dev bash -c " make  -f Makefile.neoverse neoverse_binaries"
+
+help:
+	@echo "Commands menu:"
+	@echo "- Build docker:"
+	@echo "make  -f Makefile.neoverse docker_build"
+	@echo "- Run docker:"
+	@echo "make  -f Makefile.neoverse docker_run"
+	@echo "- Build binaries"
+	@echo "make  -f Makefile.neoverse neoverse_binaries"
+
+
+repos/coreboot/util/crossgcc/xgcc/bin/aarch64-elf-gcc:
+	make -C ./repos/coreboot crossgcc-aarch64 CPUS=$$(nproc) -j$$(nproc)
+
+repos/u-root/initramfs.linux_arm64.cpio:
+	git submodule update --init ./repos/u-root
+	cd ./repos/u-root && \
+	go build . && \
+	GOARCH=arm64 ./u-root -uroot-source . -o initramfs.linux_arm64.cpio coreboot-app cmds/core/* cmds/exp/* cmds/boot/*
+
+repos/linux/arch/arm64/boot/Image: repos/u-root/initramfs.linux_arm64.cpio
+	cp ./blobs/linux/rdn2-defconfig ./repos/linux/.config
+	cp ./repos/u-root/initramfs.linux_arm64.cpio ./repos/linux
+	cd ./repos/linux && \
+	make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$$(nproc) olddefconfig && \
+	make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$$(nproc) all
+
+repos/coreboot/payloads/uefistub/Image: repos/linux/arch/arm64/boot/Image 
+	cp $< $@
+
+repos/coreboot/payloads/uefistub/build/uefistub.elf: repos/coreboot/payloads/uefistub/Image repos/coreboot/util/crossgcc/xgcc/bin/aarch64-elf-gcc
+	cp ./blobs/uefistub/defconfig ./repos/coreboot/payloads/uefistub/configs/defconfig
+	cd ./repos/coreboot/payloads/uefistub && \
+	make defconfig && \
+	make
+
+repos/coreboot/uefistub.elf: repos/coreboot/payloads/uefistub/build/uefistub.elf
+	cp $< $@ 
+
+# Noeverse stuff
+apply_patch:
+	@echo "Checking if patch is applied..."
+	@cd repos/trusted-firmware-a && \
+		git fetch origin && \
+		git checkout RD-INFRA-2023.06.30 && \
+		(echo "Applying patch..." && \
+		git apply  ../../blobs/tfa/neoverse_stack.patch 2>/dev/null || \
+		echo "Patch already applied")
+
+
+repos/trusted-firmware-a/build/rdn2/debug/bl1.bin: apply_patch
+	@echo "TFA build for Neoverse N2.."
+	cd repos/trusted-firmware-a && \
+	make -j$$(nproc) PLAT=rdn2 ARCH=aarch64 CROSS_COMPILE=aarch64-linux-gnu- DEBUG=1  LOG_LEVEL=30 CFLAGS=-DPLAT_DRAM2_SIZE=0x180000000 ARM_BL31_IN_DRAM=1 TRUSTED_BOARD_BOOT=0 V=0   CROSS_COMPILE=aarch64-linux-gnu- fiptool all certtool
+	@mkdir -p out
+	@cp repos/trusted-firmware-a/build/rdn2/debug/fdts/*.dtb out/
+
+out/coreboot.rom: repos/coreboot/payloads/uefistub/Image repos/coreboot/util/crossgcc/xgcc/bin/aarch64-elf-gcc
+	cp blobs/uefistub/neover_n2_defconfig ./repos/coreboot/payloads/uefistub/configs/defconfig
+	cd ./repos/coreboot/payloads/uefistub && \
+	make clean && make defconfig && \
+	make
+	cp repos/coreboot/payloads/uefistub/build/uefistub.elf repos/coreboot/
+	#cp blobs/coreboot/uefistub.elf repos/coreboot/
+	@echo "Building Coreboot FW for Neoverse N2"
+	cp ./blobs/coreboot/neoverse-n2-uefistub-defconfig ./repos/coreboot/configs/defconfig;
+	make -C ./repos/coreboot defconfig;
+	make -C ./repos/coreboot -j$$(nproc);
+	make -C ./repos/coreboot -j$$(nproc) ctags-project;
+	@mkdir -p out
+	@cp repos/coreboot/build/coreboot.rom out/
+	@cp repos/coreboot/build/cbfs/fallback/bootblock.bin out/
+
+neoverse_tfa: repos/trusted-firmware-a/build/rdn2/debug/bl1.bin
+neoverse_coreboot: out/coreboot.rom
+
+out/fip.bin: neoverse_tfa neoverse_coreboot
+	@echo "Neoverse"
+	@cp repos/trusted-firmware-a/build/rdn2/debug/bl*.bin out/
+	@cp repos/coreboot/build/coreboot.rom out/
+	@cp repos/coreboot/build/cbfs/fallback/bootblock.bin out/
+	@cp repos/trusted-firmware-a/tools/fiptool/fiptool out/
+	@out/fiptool create \
+	--fw-config ./out/rdn2_fw_config.dtb \
+	--tb-fw out/bl2.bin \
+	--tb-fw-config ./out/rdn2_tb_fw_config.dtb \
+	--soc-fw out/bl31.bin \
+	--soc-fw-config ./out/rdn2_soc_fw_config.dtb \
+	--nt-fw-config out/rdn2_nt_fw_config.dtb \
+	--nt-fw out/bootblock.bin out/fip.bin
+	@out/fiptool  info out/fip.bin
+
+coreboot_bin: out/fip.bin
+	@dd if=out/fip.bin of=out/coreboot.rom bs=4096 conv=notrunc
+
+neoverse_binaries: coreboot_bin
+
+tools/fvp/FVP_RD_V2_11.20_18_Linux64.tgz:
+	@echo "Dowloading FVP_RD.."
+	@mkdir -p tools/fvp
+	@wget https://developer.arm.com/-/media/Arm%20Developer%20Community/Downloads/OSS/FVP/Neoverse-V2/RD-V2-11-20-18-release/FVP_RD_V2_11.20_18_Linux64.tgz -O $@
+	@touch	$@
+
+tools/fvp/ext/models/Linux64_GCC-9.3/FVP_RD_V2: tools/fvp/FVP_RD_V2_11.20_18_Linux64.tgz
+	@echo "Setting up FVP tool."
+	@echo "Extracting neoverse tool"
+	@mkdir -p tools/fvp
+	@tar xf $? -C tools/fvp/
+	@tools/fvp/FVP_RD_V2.sh --no-interactive --i-agree-to-the-contained-eula  -q -d tools/fvp/ext/
+	@touch $@
+
+out/Fedora-Server-36-1.5.aarch64.raw:
+	@echo "Downloading Fedora36 image for ARM64.."
+	@wget https://archives.fedoraproject.org/pub/archive/fedora/linux/releases/36/Server/aarch64/images/Fedora-Server-36-1.5.aarch64.raw.xz -O out/Fedora-Server-36-1.5.aarch64.raw.xz
+	@xz -d out/Fedora-Server-36-1.5.aarch64.raw.xz
+
+neoverse_model: tools/fvp/ext/models/Linux64_GCC-9.3/FVP_RD_V2 out/Fedora-Server-36-1.5.aarch64.raw
+	@echo "Noeverse setup OK"
+
+TIME_STAMP := $(shell date +"%Y-%m-%d_%H-%M-%S")
+neoverse_run: neoverse_model
+	@echo "Running the model..."
+	@mkdir -p out/log
+	tools/fvp/ext/models/Linux64_GCC-9.3/FVP_RD_V2 \
+	-C css.scp.pl011_uart_scp.out_file=out/log/uart-0-scp-$(TIME_STAMP) \
+	-C css.scp.pl011_uart_scp.unbuffered_output=1 \
+	-C css.scp.pl011_uart_scp.uart_enable=true \
+	-C css.mcp.pl011_uart_mcp.out_file=out/log/uart-0-mcp-$(TIME_STAMP) \
+	-C css.mcp.pl011_uart_mcp.unbuffered_output=1 \
+	-C css.pl011_ns_uart_ap.out_file=out/log/uart-0-nsec-$(TIME_STAMP) \
+	-C css.pl011_ns_uart_ap.unbuffered_output=1 \
+	-C css.pl011_ns_uart_ap.flow_ctrl_mask_en=1 \
+	-C css.pl011_ns_uart_ap.enable_dc4=1 \
+	-C css.pl011_s_uart_ap.out_file=out/log/uart-0-sec-$(TIME_STAMP) \
+	-C css.pl011_s_uart_ap.unbuffered_output=1 \
+	-C css.pl011_s_uart_ap.flow_ctrl_mask_en=1 \
+	-C css.pl011_s_uart_ap.enable_dc4=0 \
+	-C soc.pl011_uart0.flow_ctrl_mask_en=1 \
+	-C soc.pl011_uart0.enable_dc4=0 \
+	-C css.gic_distributor.ITS-device-bits=20 \
+	-C 'pcie_group_0.pciex16.hierarchy_file_name=<default>' \
+	-C pcie_group_0.pciex16.pcie_rc.ahci0.endpoint.ats_supported=true \
+	-C css.tzc0.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc0.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc0.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc1.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc1.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc1.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc2.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc2.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc2.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc3.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc3.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc3.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc4.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc4.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc4.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc5.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc5.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc5.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc6.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc6.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc6.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc7.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc7.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc7.tzc400.rst_region_id_access_0=0xffffffff \
+	--data css.scp.armcortexm7ct=blobs/tfa/scp_ramfw.bin@0x0BD80000 \
+	--data css.mcp.armcortexm7ct=blobs/tfa/mcp_ramfw.bin@0x0BF80000 \
+	-C css.mcp.ROMloader.fname=blobs/tfa/mcp_romfw.bin \
+	-C css.scp.ROMloader.fname=blobs/tfa/scp_romfw.bin \
+	-C css.trustedBootROMloader.fname=out/bl1.bin \
+	-C board.flashloader0.fname=out/coreboot.rom \
+	-C board.virtioblockdevice.image_path=out/Fedora-Server-36-1.5.aarch64.raw \
+	-C board.dram_size=0x200000000 \
+	--log out/log/uart-0-log-$(TIME_STAMP)
+#	Network isn't working in WSL. so keeping it off.
+#	-C board.virtio_net.enabled=1
+#	-C board.virtio_net.hostbridge.interfaceName=tap0
+
+edk2_run:
+	@echo "Running the model..."
+	@mkdir -p out/log
+	tools/fvp/ext/models/Linux64_GCC-9.3/FVP_RD_V2 \
+	-C css.scp.pl011_uart_scp.out_file=out/log/uart-0-scp-$(TIME_STAMP) \
+	-C css.scp.pl011_uart_scp.unbuffered_output=1 \
+	-C css.scp.pl011_uart_scp.uart_enable=true \
+	-C css.mcp.pl011_uart_mcp.out_file=out/log/uart-0-mcp-$(TIME_STAMP) \
+	-C css.mcp.pl011_uart_mcp.unbuffered_output=1 \
+	-C css.pl011_ns_uart_ap.out_file=out/log/uart-0-nsec-$(TIME_STAMP) \
+	-C css.pl011_ns_uart_ap.unbuffered_output=1 \
+	-C css.pl011_ns_uart_ap.flow_ctrl_mask_en=1 \
+	-C css.pl011_ns_uart_ap.enable_dc4=1 \
+	-C css.pl011_s_uart_ap.out_file=out/log/uart-0-sec-$(TIME_STAMP) \
+	-C css.pl011_s_uart_ap.unbuffered_output=1 \
+	-C css.pl011_s_uart_ap.flow_ctrl_mask_en=1 \
+	-C css.pl011_s_uart_ap.enable_dc4=0 \
+	-C soc.pl011_uart0.flow_ctrl_mask_en=1 \
+	-C soc.pl011_uart0.enable_dc4=0 \
+	-C css.gic_distributor.ITS-device-bits=20 \
+	-C 'pcie_group_0.pciex16.hierarchy_file_name=<default>' \
+	-C pcie_group_0.pciex16.pcie_rc.ahci0.endpoint.ats_supported=true \
+	-C css.tzc0.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc0.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc0.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc1.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc1.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc1.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc2.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc2.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc2.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc3.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc3.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc3.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc4.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc4.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc4.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc5.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc5.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc5.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc6.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc6.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc6.tzc400.rst_region_id_access_0=0xffffffff \
+	-C css.tzc7.tzc400.rst_gate_keeper=0x0f \
+	-C css.tzc7.tzc400.rst_region_attributes_0=0xc000000f \
+	-C css.tzc7.tzc400.rst_region_id_access_0=0xffffffff \
+	--data css.scp.armcortexm7ct=blobs/uefi/scp_ramfw.bin@0x0BD80000 \
+	--data css.mcp.armcortexm7ct=blobs/uefi/mcp_ramfw.bin@0x0BF80000 \
+	-C css.mcp.ROMloader.fname=blobs/uefi/mcp_romfw.bin \
+	-C css.scp.ROMloader.fname=blobs/uefi/scp_romfw.bin \
+	-C css.trustedBootROMloader.fname=blobs/uefi/tf-bl1.bin \
+	-C board.flashloader0.fname=blobs/uefi/fip-uefi.bin \
+	-C board.virtioblockdevice.image_path=out/Fedora-Server-36-1.5.aarch64.raw \
+	-C board.dram_size=0x200000000 \
+	--log out/log/uart-0-log-$(TIME_STAMP)
+#	Network tap0 doesn't works in WSL.
+#	-C board.virtio_net.enabled=1
+#	-C board.virtio_net.hostbridge.interfaceName=tap0
+
+fedora_qemu_run:
+	qemu-system-aarch64  -machine virt,gic-version=max \
+	-m 512M \
+	-cpu max \
+	-smp 4 \
+	-drive file=blobs/qemu/flash0.img,format=raw,if=pflash \
+	-netdev user,id=vnet,hostfwd=:127.0.0.1:0-:22 \
+	-device virtio-net-pci,netdev=vnet \
+	-device virtio-blk,drive=drive0,bootindex=0 \
+	-drive file=out/Fedora-Server-36-1.5.aarch64.raw,format=raw,if=none,id=drive0,cache=writeback
+
+neoverse_clean:
+	rm -rf tools
+	rm -rf repos/trusted-firmware-a
+	rm -rf repos/coreboot/build
+	rm -rf repos/coreboot/uefistub.elf
+	rm -rf repos/coreboot/payload/uefistub/build
+	rm -rf repos/coreboot/payload/uefistub/Image
+	rm -rf out/bl* out/bootblock.bin out/coreboot.rom out/fip* out/rdn2*
+
+clean:
+	rm out/coreboot.rom

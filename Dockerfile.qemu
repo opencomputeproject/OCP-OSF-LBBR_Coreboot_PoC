@@ -1,0 +1,20 @@
+FROM ubuntu:22.04 AS base
+
+# Install dependencies
+RUN apt update && apt upgrade -y
+RUN DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC apt-get -y install tzdata
+RUN apt install -y git bison build-essential curl flex gnat libncurses5-dev m4 zlib1g-dev gcc-aarch64-linux-gnu \
+  bc coccinelle \
+  device-tree-compiler dfu-util efitools gdisk liblz4-tool \
+  libguestfs-tools libncurses-dev libpython3-dev libsdl2-dev libssl-dev \
+  lzma-alone openssl python3 python3-coverage python3-pyelftools \
+  python3-pytest python3-sphinxcontrib.apidoc python3-sphinx-rtd-theme swig \
+  tar u-boot-tools git-lfs qemu-system-arm vim golang seabios
+
+WORKDIR /work
+
+COPY . /work
+
+RUN make -j -f Makefile.qemu
+
+CMD ["make", "-j", "-f", "Makefile.qemu", "run"]

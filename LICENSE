@@ -1,0 +1,8 @@
+This Software incorporates third-party software listed below. The provisions contained in each
+such license apply only to the respective third-party software.
+
+1.      coreboot (https://github.com/coreboot/coreboot/blob/master/COPYING)
+2.      Linux Kernel (https://github.com/torvalds/linux/blob/master/COPYING)
+3.      u-root (https://github.com/u-root/u-root/blob/master/LICENSE)
+4.      TF-A (https://git.trustedfirmware.org/TF-A/trusted-firmware-a.git/+/refs/heads/master/docs/license.rst)
+5.      Go (https://github.com/golang/go/blob/master/LICENSE)

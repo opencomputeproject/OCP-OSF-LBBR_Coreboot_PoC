@@ -1,0 +1,4 @@
+CONFIG_BOARD_EMULATION_QEMU_SBSA=y
+# CONFIG_PAYLOAD_NONE is not set
+CONFIG_PAYLOAD_ELF=y
+CONFIG_PAYLOAD_FILE="payloads/uefistub/build/uefistub.elf"
