@@ -1,6 +1,6 @@
 [submodule "repos/u-root"]
 	path = repos/u-root
-	url = https://github.com/u-root/u-root.git
+	url = https://github.com/u-root/u-root
 [submodule "repos/linux"]
 	path = repos/linux
 	url = https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
